@@ -1,0 +1,10 @@
+/(original)*
+/venv
+/.idea
+/add_kanji_frequencies/
+/add_kanji_jinmeiyo/
+/lookup_keyword/
+/reload_addons/
+/retrieve_past_stats/
+/search_selected_text/
+/set_old_stats_as_default/
