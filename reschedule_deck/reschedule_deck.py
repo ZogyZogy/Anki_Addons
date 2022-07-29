@@ -12,19 +12,15 @@ from aqt import mw
 from aqt.utils import showInfo
 
 # --- EXTERNAL VARIABLES ---#
-NAME_OF_DECK_TO_RESCHEDULE = "JP - Kanji 2k RTK::JP - Kanji - Subdeck 2"
-MAX_INTERVAL = 21
-IS_RESCHEDULE_PAST_OVERDUE_CARDS = True
+# NAME_OF_DECK_TO_RESCHEDULE = "JP - Kanji 2k RTK::JP - Kanji - Subdeck 2"
+# MAX_INTERVAL = 21
+# IS_RESCHEDULE_PAST_OVERDUE_CARDS = True
 
 # --- INTERNAL VARIABLES ---#
 DUE_ATTRIBUTE_OF_CARD_ABOVE_WHICH_CARD_IS_SUSPENDED = 1_000_000_000
 
 
 # --- BEGINNING of ReorderDeck Class --- #
-
-
-def range1(start, end):
-    return range(start, end + 1)
 
 
 # This class only contain the logic of the rescheduling.
@@ -51,18 +47,20 @@ class RescheduleDeck:
     difference_of_cards_by_interval_by_due_date: Dict[int, Dict[int, int]] = dict()
 
     # --- Internal Variables used after the algorithm as a result (not modified once initialized) --- #
-    due_date_new_by_card: Dict[Card, int]
+    range_for_difference: Sequence[int]
     cards_with_new_due_date: Dict[Card, int]
 
     # TODO: improve comment
-    def __init__(self, cards: Sequence[Card], deck: DeckDict, sequence_of_intervals: Sequence[int]) -> None:
+    def __init__(self, deck: DeckDict, cards: Sequence[Card],
+                 sequence_of_intervals: Sequence[int],
+                 is_reschedule_overdue_cards: bool) -> None:
+
         # Initialization of "External" Variables
-        self.cards = list(cards)
         self.deck = deck
-        # self.max_interval = MAX_INTERVAL
+        self.cards = list(cards)
         self.sequence_of_intervals = sequence_of_intervals
         self.max_due = DUE_ATTRIBUTE_OF_CARD_ABOVE_WHICH_CARD_IS_SUSPENDED
-        self.is_reschedule_past_overdue_cards = IS_RESCHEDULE_PAST_OVERDUE_CARDS
+        self.is_reschedule_past_overdue_cards = is_reschedule_overdue_cards
 
         # Preparation of Internal Variables for later use by the rescheduling algorithm
         self.date_of_today = self.retrieve_date_of_today(deck)
@@ -72,19 +70,19 @@ class RescheduleDeck:
         self.cards_by_interval_by_due_day = RescheduleDeck.init_dict_of_dict_of_cards(self.sequence_of_intervals)
         self.sort_cards_by_interval_by_due_date_and_saves_original_due_date()
         self.calculate_average_number_by_due_day()
+        self.range_for_difference = range(0, len(self.sequence_of_intervals))
         self.calculate_difference_between_current_and_average_due_date()
-
-        # self.print_cards_by_interval()
-        # self.print_cards_by_interval_by_due_date()
-        # self.print_average()
-        # self.print_difference()
 
         # Algorithm
         self.reschedule_cards_according_to_average()
 
         # After algorithm
-        self.due_date_new_by_card = self.determine_due_date_new_by_card()
         self.cards_with_new_due_date = self.determine_cards_with_new_intervals()
+
+        # self.print_cards_by_interval()
+        # self.print_cards_by_interval_by_due_date()
+        # self.print_average()
+        # self.print_difference()
         # self.print_distribution_of_cards_rescheduled()
 
     # --- Initialization Functions of ReorderDeck Class --- #
@@ -119,8 +117,11 @@ class RescheduleDeck:
 
             # If card suspended (due > max_due), we don't keep it
             # TODO: Check (This apparently includes cards in failed status => ???????)
-            if card.due > self.max_due:
+            if card.due > self.max_due and card.queue != 0:
                 cards_to_remove.append(card)
+                showInfo(self.print_vars_obj(card))
+                showInfo(self.print_vars_obj(card.note()))
+
 
             # If card past overdue and we don't want to reschedule them, we don't keep it
             due_day: int = self.get_due_day(card)
@@ -144,11 +145,13 @@ class RescheduleDeck:
             cards_for_given_interval: List[Card] = self.cards_by_interval[interval]
             for card in cards_for_given_interval:
                 due_day: int = self.get_due_day(card)
-                self.due_date_first_original_by_card[card] = due_day
-                # If card is past overdue, we automatically reschedule it to due tomorrow
+                # If card is past overdue, we set original due_day to today and reschedule the card to tomorrow
                 if due_day <= 0:
-                    due_day = 1
-                self.cards_by_interval_by_due_day[interval][due_day].append(card)
+                    self.due_date_first_original_by_card[card] = 0
+                    self.cards_by_interval_by_due_day[interval][1].append(card)
+                else:
+                    self.due_date_first_original_by_card[card] = due_day
+                    self.cards_by_interval_by_due_day[interval][due_day].append(card)
 
     def get_due_day(self, card: Card) -> int:
         return card.due - self.date_of_today
@@ -264,7 +267,7 @@ class RescheduleDeck:
         # TODO: improve comment
         # We need to find the cards which originally were the closest to target_day
         def get_cards_by_diff_between_target_and_first_original_due_date() -> Dict[int, List[Card]]:
-            cards_by_diff_compute: Dict[int, List[Card]] = RescheduleDeck.init_dict_of_cards(range1(0, interval - 1))
+            cards_by_diff_compute: Dict[int, List[Card]] = RescheduleDeck.init_dict_of_cards(range1(0, interval))
             for card in cards_for_original_day:
                 diff = abs(target_day - self.due_date_first_original_by_card[card])
                 cards_by_diff_compute[diff].append(card)
@@ -313,39 +316,41 @@ class RescheduleDeck:
 
     # --- "Result" Functions of ReorderDeck Class --- #
 
-    # We determine the new due_day from "cards_by_interval_by_due_day" modified by the algorithm
-    def determine_due_date_new_by_card(self) -> Dict[Card, int]:
-        new_due_date_by_card: Dict[Card, int] = dict()
-        for interval in self.sequence_of_intervals:
-            for due_day in range1(1, interval):
-                for card in self.cards_by_interval_by_due_day[interval][due_day]:
-                    new_due_date_by_card[card] = due_day
-        return new_due_date_by_card
-
     # We determine the cards which need to be rescheduled by comparing the original and latest due_day
     def determine_cards_with_new_intervals(self):
+
+        # We determine the new due_day from "cards_by_interval_by_due_day" modified by the algorithm
+        def determine_due_date_new_by_card() -> Dict[Card, int]:
+            new_due_date_by_card: Dict[Card, int] = dict()
+            for interval in self.sequence_of_intervals:
+                for due_day in range1(1, interval):
+                    for card_2 in self.cards_by_interval_by_due_day[interval][due_day]:
+                        new_due_date_by_card[card_2] = due_day
+            return new_due_date_by_card
+
+        due_date_new_by_card: Dict[Card, int] = determine_due_date_new_by_card()
         cards_with_new_intervals: Dict[Card, int] = dict()
         for card in self.cards:
-            if self.due_date_first_original_by_card[card] != self.due_date_new_by_card[card]:
-                cards_with_new_intervals[card] = self.due_date_new_by_card[card] + self.date_of_today
+            if self.due_date_first_original_by_card[card] != due_date_new_by_card[card]:
+                cards_with_new_intervals[card] = due_date_new_by_card[card] + self.date_of_today
         return cards_with_new_intervals
 
     # --- Print Functions of ReorderDeck Class --- #
 
     @staticmethod
-    def print_vars_obj(object):
-        showInfo(f"{object.__class__} : {str(vars(object))}")
+    def print_vars_obj(object) -> str:
+        return f"{object.__class__} : {str(vars(object))}"
 
     # TODO: improve comment
-    def print_cards_by_interval(self):
+    def print_cards_by_interval(self) -> str:
         text = "Nb of Cards for each interval"
         for interval in self.sequence_of_intervals:
             text += f"\n Nb of Cards for interval {interval} = "
             text += f"{str(len(self.cards_by_interval[interval]))}"
-        showInfo(text)
+        return text
 
     # TODO: improve comment
-    def print_cards_by_interval_by_due_date(self):
+    def print_cards_by_interval_by_due_date(self) -> str:
         text = "Nb of Cards for each interval and each due date"
         for interval in self.sequence_of_intervals:
             text += f"\n\n Nb of Cards for each due date in interval = {interval} "
@@ -353,18 +358,18 @@ class RescheduleDeck:
             for due_day in range1(1, interval):
                 text += f"\n Nb of Cards for interval = {interval} and due date = {due_day} : "
                 text += f"{str(len(self.cards_by_interval_by_due_day[interval][due_day]))}"
-        showInfo(text)
+        return text
 
     # TODO: improve comment
-    def print_average(self):
+    def print_average(self) -> str:
         text = "Computed average amount of cards across and due_days for a given interval"
         for interval in self.sequence_of_intervals:
             text += f"\n Average nb of cards for interval {interval} = "
             text += f"{self.average_number_of_cards_by_due_day[interval]}"
-        showInfo(text)
+        return text
 
     # TODO: improve comment
-    def print_difference(self):
+    def print_difference(self) -> str:
         text = "Computed difference of cards between current and average by interval and due_date"
         for interval in self.sequence_of_intervals:
             text += f"\n\n For interval = {interval}"
@@ -375,49 +380,72 @@ class RescheduleDeck:
                 text += f"\n For interval '{interval}' and due_date '{due_day}'"
                 text += f", number_of_cards = {len(self.cards_by_interval_by_due_day[interval][due_day])}"
                 text += f", difference = {self.difference_of_cards_by_interval_by_due_date[interval][due_day]}"
-        showInfo(text)
+        return text
 
-    # Access to self.cards_with_new_due_date, self.due_date_first_original_by_card, self.max_interval,
-    # self.date_of_today, self.cards
     # TODO: improve comment
     # TODO: REFACTOR
+    # TODO: DIFFERENTIATE TEXT IF RESCHEDULING PAST OVERDUE CARDS OR NOT
+    # Access to self.cards_with_new_due_date, self.due_date_first_original_by_card, self.max_interval,
+    # self.date_of_today, self.cards
     def print_distribution_of_cards_rescheduled(self) -> str:
 
         if len(self.cards_with_new_due_date) == 0:
-            return ""
+            return "No card to reschedule, your deck is already (near) perfectly rescheduled ! \\o"
 
-        cards_to_reschedule_by_diff_in_due_date: Dict[int, List[Card]] = RescheduleDeck. \
-            init_dict_of_cards(self.sequence_of_intervals)
+        cards_to_reschedule_by_absolute_diff_in_due_date: Dict[int, List[Card]] = RescheduleDeck. \
+            init_dict_of_cards(self.range_for_difference)
+        range_for_algebraic_difference = range1(-len(self.sequence_of_intervals), len(self.sequence_of_intervals))
+        cards_to_reschedule_by_algebraic_diff_in_due_date: Dict[int, List[Card]] = RescheduleDeck. \
+            init_dict_of_cards(range_for_algebraic_difference)
         for card in self.cards_with_new_due_date:
             original_due_date = self.due_date_first_original_by_card[card]
             new_due_date = self.cards_with_new_due_date[card] - self.date_of_today
-            difference = abs(new_due_date - original_due_date)
-            assert difference > 0
-            cards_to_reschedule_by_diff_in_due_date[difference].append(card)
+            absolute_difference = abs(new_due_date - original_due_date)
+            algebraic_difference = (new_due_date - original_due_date)
+            assert absolute_difference > 0
+            cards_to_reschedule_by_absolute_diff_in_due_date[absolute_difference].append(card)
+            cards_to_reschedule_by_algebraic_diff_in_due_date[algebraic_difference].append(card)
 
-        average_amount_of_rescheduling = 0
-        for interval in self.sequence_of_intervals:
-            average_amount_of_rescheduling += interval * len(cards_to_reschedule_by_diff_in_due_date[interval])
-        average_amount_of_rescheduling = average_amount_of_rescheduling / len(self.cards_with_new_due_date)
+        total_amount_of_rescheduling = 0
+        for interval in self.range_for_difference:
+            total_amount_of_rescheduling += interval * len(cards_to_reschedule_by_absolute_diff_in_due_date[interval])
+        average_amount_of_rescheduling = total_amount_of_rescheduling / len(self.cards_with_new_due_date)
         average_amount_of_rescheduling = round(average_amount_of_rescheduling * 100) / 100
         percentage_of_card_rescheduled = round(len(self.cards_with_new_due_date) / len(self.cards) * 100 * 100) / 100
 
-        text = "Distribution of cards rescheduled : "
+        total_amount_of_push_forward = 0
+        for interval in range_for_algebraic_difference:
+            total_amount_of_push_forward += interval * len(cards_to_reschedule_by_algebraic_diff_in_due_date[interval])
+        average_amount_of_push_forward = total_amount_of_push_forward / len(self.cards_with_new_due_date)
+        average_amount_of_push_forward = round(average_amount_of_push_forward * 100) / 100
+        average_amount_of_all_push_forward = total_amount_of_push_forward / len(self.cards)
+        average_amount_of_all_push_forward = round(average_amount_of_all_push_forward * 100) / 100
+
+        text = "Distribution of cards to reschedule : "
         text += f"\n Total amount of cards in deck not new and not suspended = {len(self.cards)}"
-        text += f"\n Total amount of cards rescheduled = {len(self.cards_with_new_due_date)}"
-        text += f"\n Percentage of cards rescheduled = {percentage_of_card_rescheduled}%"
-        text += f"\n Average days of rescheduling = {average_amount_of_rescheduling}"
-        for interval in self.sequence_of_intervals:
-            if len(cards_to_reschedule_by_diff_in_due_date[interval]) > 0:
-                text += f"\n  Amount of cards rescheduled by {interval} days : "
-                text += f"{len(cards_to_reschedule_by_diff_in_due_date[interval])}"
+        text += f"\n Total amount of cards to reschedule = {len(self.cards_with_new_due_date)}"
+        text += f"\n Percentage of cards to reschedule = {percentage_of_card_rescheduled}%"
+        text += f"\n Average amount by which cards are rescheduled (absolute diff among rescheduled cards)"
+        text += f" = {average_amount_of_rescheduling} days"
+        text += f"\n Average amount by which cards are pushed forward (algebraic diff among rescheduled cards)"
+        text += f" = {average_amount_of_push_forward} days"
+        text += f"\n Average amount by which all cards are pushed forward (algebraic diff among all cards)"
+        text += f" = {average_amount_of_all_push_forward} days"
+        for interval in self.range_for_difference:
+            if len(cards_to_reschedule_by_absolute_diff_in_due_date[interval]) > 0:
+                text += f"\n  Amount of cards to reschedule by +- {interval} days : "
+                text += f"{len(cards_to_reschedule_by_absolute_diff_in_due_date[interval])}"
+
+        text += f"\n"
         return text
 
-    def print_final_message(self) -> str:
-        if (len(self.cards_with_new_due_date)) > 0:
-            return "Cards Successfully Rescheduled !!! \\dab"
-        else:
-            return "No card to reschedule, your deck is perfect ! \\o"
+    # def print_final_message(self) -> str:
+    #     if (len(self.cards_with_new_due_date)) > 0:
+    #         text = self.print_distribution_of_cards_rescheduled()
+    #         text += " Cards Successfully Rescheduled !!! \\dab"
+    #         return text
+    #     else:
+    #         return
 
 
 # --- END of ReorderDeck Class --- #
@@ -433,55 +461,87 @@ class QHSeparationLine(QFrame):
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
 
+# --- BEGINNING of DialogRescheduleDeck Class --- #
+
+
 class DialogRescheduleDeck(QDialog):
+    deck_name: str
+    min_interval: int
+    max_interval: int
+    is_reschedule_overdue_cards: bool
+    is_dry_run: bool
+
     def __init__(self, parent=mw):
         super(DialogRescheduleDeck, self).__init__(parent)
 
         self.setWindowTitle("Reschedule Deck")
         self.setWindowFlags(Qt.Dialog | Qt.MSWindowsFixedSizeDialogHint)
 
-        self._deck_chooser = QComboBox()
-        self._deck_chooser.addItem('Whole Collection', None)
-        decks = {item["name"]: item["id"] for item in mw.col.decks.all()}
-        for name in sorted(decks.keys()):
-            self._deck_chooser.addItem(name, decks[name])
-        self._deck_chooser.activated.connect(self._changed)
+        self._box_deck_chooser = QComboBox()
+        self._box_deck_chooser.addItems(sorted(mw.col.decks.allNames()))
+        current_deck_id = mw.col.conf['curDeck']
+        current_deck_name = mw.col.decks.get(current_deck_id)['name']
+        self._box_deck_chooser.setCurrentText(current_deck_name)
+        self._box_deck_chooser.activated.connect(self._changed)
 
-        self._min_interval = self._spinbox(1, '1 is the minimum value possible')
-        self._max_interval = self._spinbox(21,
-                                           '21 is the default value for which cards are considered mature (author\'s max interval value in their deck)')
+        hint_text_for_min_interval = "1 is the minimum value possible"
+        self._box_min_interval = self._spinbox(1, hint_text_for_min_interval)
+        self._box_min_interval.valueChanged.connect(self._changed)
 
-        self._is_reschedule_overdue_cards = QCheckBox()
-        self._is_reschedule_overdue_cards.setChecked(False)
+        hint_text_for_max_interval = "21 is the default value for which cards are considered"
+        hint_text_for_max_interval += " mature (author's max interval value in their own decks)"
+        self._box_max_interval = self._spinbox(21, hint_text_for_max_interval)
+        self._box_max_interval.valueChanged.connect(self._changed)
 
-        self._is_dry_run = QCheckBox()
-        self._is_dry_run.setChecked(True)
+        self._box_is_reschedule_overdue_cards = QCheckBox()
+        self._box_is_reschedule_overdue_cards.setChecked(False)
+        self._box_is_reschedule_overdue_cards.stateChanged.connect(self._changed)
 
-        self._explanation = QLabel()
-        self._explanation.setWordWrap(True)
+        self._box_is_dry_run = QCheckBox()
+        self._box_is_dry_run.setChecked(True)
+        self._box_is_dry_run.stateChanged.connect(self._changed)
+
+        self._label_parameters_summary = QLabel()
+        self._label_parameters_summary.setWordWrap(True)
+
+        self._label_rescheduling_information = QLabel()
+        self._label_rescheduling_information.setWordWrap(True)
+
+        text_for_dry_run = "\n<font color=orange>Dry-run activated : the deck will NOT be rescheduled" \
+                           ", this will only display a preview of the schedule performed</font>"
+        self._label_warning_dry_run = QLabel(text_for_dry_run)
+        self._label_warning_dry_run.setWordWrap(True)
+        text_for_actual_run = "\n<font color=red>Dry-run DISACTIVATED : The deck WILL BE rescheduled - this action CANNOT be undone.</font>"
+        self._label_warning_actual_run = QLabel(text_for_actual_run)
+        self._label_warning_actual_run.setWordWrap(True)
+
+        # First initialization of internal variables (for use outside)
         self._changed()
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
+        button_box.accepted.connect(self._run_algorithm)
         button_box.rejected.connect(self.reject)
 
         layout = QGridLayout()
         layout.addWidget(self._label('Deck: '), 0, 0)
-        layout.addWidget(self._deck_chooser, 0, 1, 1, 2)
+        layout.addWidget(self._box_deck_chooser, 0, 1)
         layout.addWidget(self._label('Minimum interval: '), 1, 0)
-        layout.addWidget(self._max_interval, 1, 1)
+        layout.addWidget(self._box_min_interval, 1, 1)
         layout.addWidget(self._label('Maximum interval: '), 2, 0)
-        layout.addWidget(self._min_interval, 2, 1)
+        layout.addWidget(self._box_max_interval, 2, 1)
         layout.addWidget(self._label('Reschedule overdue cards: '), 3, 0)
-        layout.addWidget(self._is_reschedule_overdue_cards, 3, 1)
-        layout.addWidget(self._label('Dry run (do not actually reschedule): '), 4, 0)
-        layout.addWidget(self._is_dry_run, 4, 1)
+        layout.addWidget(self._box_is_reschedule_overdue_cards, 3, 1)
+        layout.addWidget(self._label('Dry-run (do not actually reschedule): '), 4, 0)
+        layout.addWidget(self._box_is_dry_run, 4, 1)
 
-        layout.addWidget(QHSeparationLine(), 5, 0, 1, 3)
-        layout.addWidget(self._explanation, 6, 0, 1, 3)
-        layout.addWidget(QLabel('<font color=red>This action cannot be undone.</font>'), 7, 0, 1, 3)
-        layout.addWidget(QHSeparationLine(), 8, 0, 1, 3)
-        layout.addWidget(button_box, 9, 0, 1, 3)
+        layout.addWidget(QHSeparationLine(), 5, 0, 1, 2)
+        layout.addWidget(self._label_parameters_summary, 6, 0, 1, 2)
+        layout.addWidget(self._label_rescheduling_information, 7, 0, 1, 2)
+
+        layout.addWidget(self._label_warning_dry_run, 8, 0, 1, 2)
+        layout.addWidget(self._label_warning_actual_run, 8, 0, 1, 2)
+        layout.addWidget(QHSeparationLine(), 10, 0, 1, 2)
+        layout.addWidget(button_box, 11, 0, 1, 2)
         self.setLayout(layout)
 
     def _spinbox(self, value, tooltip):
@@ -490,41 +550,71 @@ class DialogRescheduleDeck(QDialog):
         spinbox.setValue(value)
         spinbox.setSingleStep(1)
         spinbox.setToolTip(tooltip)
-        spinbox.valueChanged.connect(self._changed)
         return spinbox
 
-    def _label(self, text):
+    @staticmethod
+    def _label(text):
         label = QLabel(text)
-        label.setFixedWidth(90)
+        # label.setFixedWidth(70)
         return label
 
     def _changed(self):
-        # old_ease_specified = self._operator.currentData() is not None
-        # (sql, params) = self.sql('count(*)')
-        # n = mw.col.db.scalar(sql, *params)
-        # d = 'the {0} deck'.format(self._deck_chooser.currentText()) if self._deck_chooser.currentData() else 'any deck'
-        # e = 'an ease {0} {1}%'.format(self._operator.currentText(), self._old_ease.value()) if old_ease_specified else 'a different ease'
-        # s = 'Press OK to change the ease to {0}% for the {1} cards in {2} which currently have {3}.\n'.format(self.new_ease(), n, d, e)
-        # self._explanation.setText(s)
-        # self._old_ease.setEnabled(old_ease_specified)
-        # self._old_ease.setVisible(old_ease_specified)
-        self._explanation.setText("Yoooo")
+        # If state changed, update internal variables
+        self.deck_name = self._box_deck_chooser.currentText()
+        self.min_interval = self._box_min_interval.value()
+        self.max_interval = self._box_max_interval.value()
+        self.is_dry_run = self._box_is_dry_run.isChecked()
+        self.is_reschedule_overdue_cards = self._box_is_reschedule_overdue_cards.isChecked()
+
+        # If state changed, update displayed text
+        self._label_parameters_summary.setText(self._print_parameters())
+        if self.is_dry_run:
+            self._label_warning_dry_run.show()
+            self._label_warning_actual_run.hide()
+        else:
+            self._label_warning_dry_run.hide()
+            self._label_warning_actual_run.show()
+
+    def _print_parameters(self) -> str:
+        text = f"Deck = {self.deck_name}"
+        text += f"\nRange = {range1(self.min_interval, self.max_interval)}"
+        text += f"\nIs dry-run = {self.is_dry_run}"
+        text += f"\nIs reschedule overdue cards = {self.is_reschedule_overdue_cards}"
+        return text
+
+    def _run_algorithm(self):
+        deck: DeckDict = get_deck(self.deck_name)
+        cards: List[Card] = get_cards(self.deck_name)
+        range_of_intervals = range1(self.min_interval, self.max_interval)
+
+        reorder_deck = RescheduleDeck(deck, cards, range_of_intervals, self.is_reschedule_overdue_cards)
+        self._label_rescheduling_information.setText(reorder_deck.print_distribution_of_cards_rescheduled())
+        if not self.is_dry_run:
+            # TODO: Add a confirmation pop-up
+            reschedule_cards_in_database(reorder_deck.cards_with_new_due_date)
+            # TODO: Add a success window (with some kind of internal check to ensure the rescheduling went okay!!!)
+
+# --- END of DialogRescheduleDeck Class --- #
 
 
-# --- FUNCTIONS ---#
+# --- GLOBAL FUNCTIONS ---#
 
 
-def get_cards() -> List[Card]:
-    deck_id: DeckId = mw.col.decks.id_for_name(NAME_OF_DECK_TO_RESCHEDULE)
+def range1(start, end):
+    return range(start, end + 1)
+
+
+def get_cards(deckname: str) -> List[Card]:
+    deck_id: DeckId = mw.col.decks.id_for_name(deckname)
     card_ids: List[CardId] = mw.col.decks.cids(deck_id, children=True)
     return [mw.col.get_card(card_id) for card_id in card_ids]
 
 
-def get_deck() -> DeckDict:
-    return mw.col.decks.by_name(NAME_OF_DECK_TO_RESCHEDULE)
+def get_deck(deckname: str) -> DeckDict:
+    return mw.col.decks.by_name(deckname)
 
 
-def reorder_cards(cards_with_new_due_date: Dict[Card, int]) -> None:
+def reschedule_cards_in_database(cards_with_new_due_date: Dict[Card, int]) -> None:
     for card in cards_with_new_due_date:
         card.due = cards_with_new_due_date[card]
         card.flush()
@@ -533,20 +623,7 @@ def reorder_cards(cards_with_new_due_date: Dict[Card, int]) -> None:
 
 def main_function() -> None:
     reschedule_dialog = DialogRescheduleDeck()
-    if reschedule_dialog.exec():
-        reorder_deck = RescheduleDeck(get_cards(), get_deck(), range1(1, MAX_INTERVAL))
-        # reorder_cards(reorder_deck.cards_with_new_due_date)
-        showInfo(reorder_deck.print_distribution_of_cards_rescheduled())
-        showInfo(reorder_deck.print_final_message())
-        #reschedule_dialog._explanation.setText(text)
-        #reschedule_dialog.ac()
-
-# def sort_cards_by_function(function: Callable[[Card], int],
-#                            cards: List[Card],
-#                            dict: Dict[int, List[Card]]) -> None:
-#     for card in cards:
-#         card_interval = function(card)
-#         dict[card_interval].append(card)
+    reschedule_dialog.exec()
 
 
 action = QtWidgets.QAction("Reorder Deck", mw)
