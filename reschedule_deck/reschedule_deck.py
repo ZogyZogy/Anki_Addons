@@ -15,18 +15,21 @@ from aqt.utils import showInfo
 # NAME_OF_DECK_TO_RESCHEDULE = "JP - Kanji 2k RTK::JP - Kanji - Subdeck 2"
 # MAX_INTERVAL = 21
 # IS_RESCHEDULE_PAST_OVERDUE_CARDS = True
-DEFAULT_MIN_VALUE_IN_RANGE = 18
-DEFAULT_MAX_VALUE_IN_RANGE = 18
+DEFAULT_MIN_VALUE_IN_RANGE = 1
+DEFAULT_MAX_VALUE_IN_RANGE = 21
 DEFAULT_DRY_RUN = True
 DEFAULT_RESCHEDULE_OVERDUE_CARDS = False
 
 # --- INTERNAL VARIABLES ---#
+# Custom Classes
+Average = Union[int, float]
+# ??
 DUE_ATTRIBUTE_OF_CARD_ABOVE_WHICH_CARD_IS_SUSPENDED = 1_000_000_000
 MAX_ITERATION_IN_MAIN_ALGORITHM = 1_500
-SHOW_EVERY_ITERATION = True
 
-Average = Union[int, float]
-
+# Stuff to simplify Testing
+SHOW_EVERY_ITERATION = False
+USE_ALGORITHM_1_BY_HIGHEST_DIFFERENCE = True
 
 # --- BEGINNING of ReorderDeck Class --- #
 
@@ -53,17 +56,17 @@ class RescheduleDeck:
     cards_by_interval: Dict[int, List[Card]] = dict()
     cards_with_first_original_due_day: Dict[Card, int] = dict()
     average_number_of_cards_by_interval: Dict[int, Average] = dict()
-    cards_by_interval_by_due_day_original: Dict[int, Dict[int, List[Card]]] = dict()
-    difference_of_cards_by_interval_by_due_date_original: Dict[int, Dict[int, int]] = dict()
+    cards_original_by_interval_by_due_day: Dict[int, Dict[int, List[Card]]] = dict()
+    difference_original_of_cards_by_interval_by_due_day: Dict[int, Dict[int, int]] = dict()
 
     # --- Internal Variables modified by the algorithm after their first initialization--- #
-    cards_by_interval_by_due_day_target: Dict[int, Dict[int, List[Card]]] = dict()
-    difference_of_cards_by_interval_by_due_date_target: Dict[int, Dict[int, int]] = dict()
+    number_of_iterations_of_main_algorithm: Dict[int, int] = dict()
+    cards_target_by_interval_by_due_day: Dict[int, Dict[int, List[Card]]] = dict()
+    difference_target_of_cards_by_interval_by_due_day: Dict[int, Dict[int, int]] = dict()
 
     # --- Internal Variables used after the algorithm as a result (not modified once initialized) --- #
-    cards_with_only_different_new_due_date: Dict[Card, int]
+    cards_with_only_different_new_due_day: Dict[Card, int]
 
-    # TODO: improve comment
     def __init__(self, deck: DeckDict, cards: Sequence[Card],
                  sequence_of_intervals: Sequence[int],
                  is_reschedule_overdue_cards: bool) -> None:
@@ -81,24 +84,27 @@ class RescheduleDeck:
         self.exclude_irrelevant_cards_and_modify_others()
         self.cards_by_interval = RescheduleDeck.init_dict_of_cards(self.sequence_of_intervals)
         self.sort_cards_by_interval()
-        self.cards_by_interval_by_due_day_original = RescheduleDeck.init_dict_of_dict_of_cards(
+        self.cards_original_by_interval_by_due_day = RescheduleDeck.init_dict_of_dict_of_cards(
             self.sequence_of_intervals)
-        self.cards_by_interval_by_due_day_target = RescheduleDeck.init_dict_of_dict_of_cards(self.sequence_of_intervals)
-        self.sort_cards_by_interval_by_due_date_and_saves_original_due_date(self.cards_by_interval_by_due_day_original)
-        self.sort_cards_by_interval_by_due_date_and_saves_original_due_date(self.cards_by_interval_by_due_day_target)
+        self.cards_target_by_interval_by_due_day = RescheduleDeck.init_dict_of_dict_of_cards(self.sequence_of_intervals)
+        self.sort_cards_by_interval_by_due_day_and_saves_original_due_day(self.cards_original_by_interval_by_due_day)
+        self.sort_cards_by_interval_by_due_day_and_saves_original_due_day(self.cards_target_by_interval_by_due_day)
         self.calculate_average_number_by_due_day()
-        self.calculate_difference_between_current_and_average_due_date()
-        self.difference_of_cards_by_interval_by_due_date_original = dict(self.difference_of_cards_by_interval_by_due_date_target)
+        self.calculate_difference_between_current_and_average_due_day()
+        self.difference_original_of_cards_by_interval_by_due_day = dict(
+            self.difference_target_of_cards_by_interval_by_due_day)
 
         # Algorithm
-        self.reschedule_cards_algorithm_1_by_highest_difference()
-        # self.reschedule_cards_algorithm_2_by_left_to_right()
+        if USE_ALGORITHM_1_BY_HIGHEST_DIFFERENCE:
+            self.reschedule_cards_algorithm_1_by_highest_difference()
+        # else:
+        #     self.reschedule_cards_algorithm_2_by_left_to_right()
 
         # After algorithm
-        self.cards_with_only_different_new_due_date = self.determine_cards_with_only_different_new_due_day()
+        self.cards_with_only_different_new_due_day = self.determine_cards_with_only_different_new_due_day()
 
         # self.print_cards_by_interval()
-        # self.print_cards_by_interval_by_due_date()
+        # self.print_cards_by_interval_by_due_day()
         # self.print_average()
         # self.print_difference()
         # self.print_distribution_of_cards_rescheduled()
@@ -220,9 +226,9 @@ class RescheduleDeck:
     def get_interval(card: Card):
         return card.ivl
 
-    # TODO: split this method in two, one for updating and saving original_due_date, another for the sort
-    def sort_cards_by_interval_by_due_date_and_saves_original_due_date(self,
-                                                                       cards: Dict[int, Dict[int, List[Card]]]) -> None:
+    # TODO: split this method in two, one for updating and saving original_due_day, another for the sort
+    def sort_cards_by_interval_by_due_day_and_saves_original_due_day(self,
+                                                                     cards: Dict[int, Dict[int, List[Card]]]) -> None:
         number_of_cards_over_scheduled = 0
         for interval in self.sequence_of_intervals:
             cards_for_given_interval: List[Card] = self.cards_by_interval[interval]
@@ -243,7 +249,7 @@ class RescheduleDeck:
                     # TODO: set original due_day to "interval + 1" (similar to past overdue cards), and modify the appropriate ranges in dictionaries
                     elif due_day > interval:
                         # TODO : There seems to be a bug in my deck where this condition is true while it shouldn't (and the browser window says it's not)
-                        # TODO: Look at the way the browser retrieves the due date
+                        # TODO: Look at the way the browser retrieves the due day
                         self.cards_with_first_original_due_day[card] = interval
                         cards[interval][interval].append(card)
                         # TODO: Save those cards somewhere and show them
@@ -263,11 +269,10 @@ class RescheduleDeck:
 
     # --- "Algorithm" Functions of ReorderDeck Class --- #
 
-    # TODO: improve comment
     def calculate_average_number_by_due_day(self):
         for interval in self.sequence_of_intervals:
             total_cards: int = 0
-            cards_by_due_day: Dict[int, List[Card]] = self.cards_by_interval_by_due_day_original[interval]
+            cards_by_due_day: Dict[int, List[Card]] = self.cards_original_by_interval_by_due_day[interval]
             for due_day in range1(1, interval):
                 total_cards += len(cards_by_due_day[due_day])
             if total_cards % interval == 0:
@@ -292,8 +297,8 @@ class RescheduleDeck:
     def is_between_point5_included_and_one_excluded(average_: Average) -> bool:
         return int(average_) != round(average_)
 
-    # TODO: improve comment
-    def calculate_difference_between_current_and_average_due_date(self):
+    # TODO: Make it so that we only recalculate for a given interval
+    def calculate_difference_between_current_and_average_due_day(self):
 
         # If DIFFERENCE > 0
         # If decimal part of average is between 0.5 (included) and 1.0 (included),
@@ -313,8 +318,8 @@ class RescheduleDeck:
             return RescheduleDeck.is_between_point5_included_and_one_excluded(average_)
 
         for interval in self.sequence_of_intervals:
-            self.difference_of_cards_by_interval_by_due_date_target[interval]: Dict[int, int] = dict()
-            cards_by_due_day: Dict[int, List[Card]] = self.cards_by_interval_by_due_day_target[interval]
+            self.difference_target_of_cards_by_interval_by_due_day[interval]: Dict[int, int] = dict()
+            cards_by_due_day: Dict[int, List[Card]] = self.cards_target_by_interval_by_due_day[interval]
             average: Average = self.average_number_of_cards_by_interval[interval]
             is_difference_to_be_decreased_when_positive = is_difference_to_be_decreased_when_pos(average)
             is_difference_to_be_increased_when_negative = is_difference_to_be_increased_when_neg(average)
@@ -324,13 +329,13 @@ class RescheduleDeck:
                     difference -= 1
                 if difference < 0 and is_difference_to_be_increased_when_negative:
                     difference += 1
-                self.difference_of_cards_by_interval_by_due_date_target[interval][due_day] = difference
+                self.difference_target_of_cards_by_interval_by_due_day[interval][due_day] = difference
 
-    # TODO: improve comment
     # Core function of the Algorithm number 2 (by sides) for rescheduling cards
     def reschedule_cards_algorithm_2_by_left_to_right(self):
         for interval in self.sequence_of_intervals:
-            difference_of_cards_by_due_day: Dict[int, int] = self.difference_of_cards_by_interval_by_due_date_target[interval]
+            difference_of_cards_by_due_day: Dict[int, int] = self.difference_target_of_cards_by_interval_by_due_day[
+                interval]
             average = self.average_number_of_cards_by_interval[interval]
             is_average_floor = round(average) == int(average)
             # If is_average_floor true, then break condition is difference = 0 or 1
@@ -346,7 +351,7 @@ class RescheduleDeck:
 
                 if (difference > 0):
                     # In this case, we only need to move cards from the current to the next due_day
-                    self.move_cards_from_original_to_target_day(interval, invert=False, amount=difference,
+                    self.move_cards_from_original_to_target_day(interval, amount=difference,
                                                                 original_day=due_day, target_day=due_day + 1)
                 elif difference < 0:
                     # In this case, we need to move cards from the superior due_days to the current due_day until enough have been moved
@@ -358,13 +363,11 @@ class RescheduleDeck:
                         next_number_of_moved_cards = number_of_moved_cards + next_difference
                         if (next_number_of_moved_cards >= difference):
                             number_of_cards_to_move = difference - number_of_moved_cards
-                            self.move_cards_from_original_to_target_day(interval, invert=False,
-                                                                        amount=number_of_cards_to_move,
+                            self.move_cards_from_original_to_target_day(interval, amount=number_of_cards_to_move,
                                                                         original_day=next_due_day, target_day=due_day)
                             break
                         else:
-                            self.move_cards_from_original_to_target_day(interval, invert=False,
-                                                                        amount=next_difference,
+                            self.move_cards_from_original_to_target_day(interval, amount=next_difference,
                                                                         original_day=next_due_day, target_day=due_day)
                             number_of_moved_cards = next_number_of_moved_cards
                             next_due_day += 1
@@ -375,174 +378,163 @@ class RescheduleDeck:
                         self.show_both_original_and_target_cards_by_interval_by_due_day()
                         raise
 
-    # TODO: improve comment
     # Core function of the Algorithm number 1 (by highest difference) for rescheduling cards
     def reschedule_cards_algorithm_1_by_highest_difference(self):
 
-        def show_error_message_of_main_algorithm():
-            text = "Problem in main algorithm : limit of expected maximum iterations broken through"
-            for interval_2 in self.sequence_of_intervals:
-                text += f"\n Number of iterations for interval {interval_2} : {nb_of_iteration[interval_2]}"
-            showInfo(text)
-            self.show_both_original_and_target_difference()
-            exit(1)
+        # --- Internal Methods of the Core Algorithm --- #
 
-        # TODO: make nb_of_iteration an attribute of the class with its own print function ?
-        # TODO: find a formula for max number of iterations possible (worst case scenario) (number_of_cards_in_interval * 5 ?)
-        nb_of_iteration: Dict[int, int] = dict()
-        for interval in self.sequence_of_intervals:
-            nb_of_iteration[interval] = 0
+        def find_highest_positive_absolute_difference() -> (int, int):
+            return find_highest_absolute_difference(positive=True)
 
-        max_iteration_for_given_range = MAX_ITERATION_IN_MAIN_ALGORITHM
-        for interval in self.sequence_of_intervals:
-            iteration = 1
+        def find_highest_negative_absolute_difference() -> (int, int):
+            return find_highest_absolute_difference(positive=False)
+
+        # needs to use "difference_target_of_cards_by_interval_by_due_day" which is modified at each iteration of the main algorithm
+        def find_highest_absolute_difference(positive: bool) -> (int, int):
+            difference_of_cards: Dict[int, int] = self.difference_target_of_cards_by_interval_by_due_day[interval]
+            due_day_for_highest_difference = 1
+            highest_difference = difference_of_cards[1]
+            for current_due_day in range1(2, interval):
+                # According to the value of positive, we search for highest positive or negative difference
+                # TODO: create own boolean type for cleaner code
+                if (positive and difference_of_cards[current_due_day] > highest_difference) or \
+                        (not positive and difference_of_cards[current_due_day] < highest_difference):
+                    due_day_for_highest_difference = current_due_day
+                    highest_difference = difference_of_cards[current_due_day]
+            return due_day_for_highest_difference, highest_difference
+
+        def find_highest_negative_algebraic_difference() -> int:
             average = self.average_number_of_cards_by_interval[interval]
-            while iteration < max_iteration_for_given_range:
+            cards_by_due_day: Dict[int, List[Card]] = self.cards_target_by_interval_by_due_day[interval]
+            min_due_day = 1
+            highest_difference = len(cards_by_due_day[1]) - average
+            for current_due_day in range1(2, interval):
+                current_difference = len(cards_by_due_day[current_due_day]) - average
+                if current_difference < highest_difference:
+                    min_due_day = current_due_day
+                    highest_difference = current_difference
+            return min_due_day
 
-                if SHOW_EVERY_ITERATION:
-                    showInfo(self.print_difference_target())
+        def find_highest_positive_algebraic_difference_closest_to_min_value(min_due_day: int) -> int:
+            average = self.average_number_of_cards_by_interval[interval]
+            cards_by_due_day: Dict[int, List[Card]] = self.cards_target_by_interval_by_due_day[interval]
+            max_due_day = 1
+            highest_difference = len(cards_by_due_day[1]) - average
+            closest_distance = abs(max_due_day - min_due_day)
+            for current_due_day in range1(2, interval):
+                current_difference = len(cards_by_due_day[current_due_day]) - average
+                current_distance = abs(current_due_day - min_due_day)
+                condition_for_highest: bool = (current_difference > highest_difference)
+                condition_for_closest: bool = (current_difference == highest_difference and
+                                               current_distance < closest_distance)
+                if condition_for_highest or condition_for_closest:
+                    max_due_day = current_due_day
+                    highest_difference = current_difference
+                    closest_distance = current_distance
+            assert max_due_day != min_due_day
+            return max_due_day
 
-                (due_max_day, max_alg_difference) = self.find_highest_positive_difference_for_given_interval(interval)
-                (due_min_day, min_alg_difference) = self.find_highest_negative_difference_for_given_interval(interval)
-
-                if max_alg_difference == 0 and min_alg_difference == 0:
-                    break
-
-                if max_alg_difference > 0:
-                    self.move_cards_from_due_day(interval, original_day=due_max_day, amount=max_alg_difference)
-                else:
-                    self.move_cards_to_due_day(interval, original_day=due_min_day, amount=-min_alg_difference)
-                # We need to recalculate self.difference_of_cards_by_interval_by_due_date_target
-                # TODO: Make it so that we only recalculate for a given interval
-                self.calculate_difference_between_current_and_average_due_date()
-                iteration += 1
-
-            nb_of_iteration[interval] = iteration
-            if nb_of_iteration[interval] == max_iteration_for_given_range:
-                show_error_message_of_main_algorithm()
-
-    def find_highest_positive_difference_for_given_interval(self, interval) -> (int, int):
-        return self.find_highest_difference_for_given_interval(interval, positive=True)
-
-    def find_highest_negative_difference_for_given_interval(self, interval) -> (int, int):
-        return self.find_highest_difference_for_given_interval(interval, positive=False)
-
-    # TODO: improve comment
-
-    # needs to use "difference_of_cards_by_interval_by_due_date_target" which is modified at each iteration of the main algorithm
-    def find_highest_difference_for_given_interval(self, interval: int, positive: bool) -> (int, int):
-        difference_of_cards: Dict[int, int] = self.difference_of_cards_by_interval_by_due_date_target[interval]
-        highest_difference = difference_of_cards[1]
-        due_date_for_highest_difference = 1
-        for current_due_date in range1(2, interval):
-            # According to the value of positive, we search for highest positive or negative difference
-            # TODO: create own boolean type for cleaner code
-            if (positive and difference_of_cards[current_due_date] > highest_difference) or \
-                    (not positive and difference_of_cards[current_due_date] < highest_difference):
-                highest_difference = difference_of_cards[current_due_date]
-                due_date_for_highest_difference = current_due_date
-        return due_date_for_highest_difference, highest_difference
-
-    def move_cards_from_due_day(self, interval: int, original_day: int, amount: int):
-        self.move_cards_from_or_to_due_day(interval, original_day, amount, invert=False)
-
-    def move_cards_to_due_day(self, interval: int, original_day: int, amount: int):
-        self.move_cards_from_or_to_due_day(interval, original_day, amount, invert=True)
-
-    # TODO: improve comment
-    def move_cards_from_or_to_due_day(self, interval: int, original_day: int, amount: int, invert: bool):
-
-        def show_error_message_for_get_first_difference_and_exits():
-            text = f"We can't find a negative value for interval = {interval}, what the hell"
-            showInfo(text)
-            self.show_both_original_and_target_difference()
-            exit(1)
-
-        def get_due_day_for_first_closest_difference(negative: bool) -> int:
-            final_due_day = 0
-            due_day = 1
-            while due_day < original_day:
-                # We need to find a due_day which has fewer cards than the average (without any rounding shenanigans)
-                difference = len(self.cards_by_interval_by_due_day_target[interval][due_day]) \
-                             - self.average_number_of_cards_by_interval[interval]
-                if (negative and difference < 0) or (not negative and difference > 0):
-                    final_due_day = due_day
-                due_day += 1
-
-            if final_due_day != 0:
-                return final_due_day
-
-            due_day = original_day + 1
-            while due_day <= interval:
-                # We need to find a due_day which has fewer cards than the average (without any rounding shenanigans)
-                difference = len(self.cards_by_interval_by_due_day_target[interval][due_day]) \
-                             - self.average_number_of_cards_by_interval[interval]
-                if (negative and difference < 0) or (not negative and difference > 0):
-                    final_due_day = due_day
-                    break
-                due_day += 1
-
-            if due_day > interval:
-                show_error_message_for_get_first_difference_and_exits()
-
-            return due_day
-
-        def get_due_day_for_first_negative_difference() -> int:
-            return get_due_day_for_first_closest_difference(negative=True)
-
-        def get_due_day_for_first_positive_difference() -> int:
-            return get_due_day_for_first_closest_difference(negative=False)
-
-        def is_move_right() -> bool:
-            if not invert and get_due_day_for_first_negative_difference() > original_day:
-                return True
-            elif invert and get_due_day_for_first_positive_difference() < original_day:
+        # Is moving from max_due_day to min_due_day moving towards increasing due_days ?
+        def is_move_right(max_due_day, min_due_day) -> bool:
+            assert max_due_day != min_due_day
+            if max_due_day < min_due_day:
                 return True
             else:
                 return False
 
-        assert amount > 0
-        assert original_day >= 1
-        assert original_day <= interval
+        # TODO: add comment
+        def move_cards_from_due_day(original_day: int, amount: int):
 
-        if original_day == 1:
-            self.move_cards_from_original_to_target_day(interval, invert, amount,
-                                                        original_day=1, target_day=2)
-        elif original_day == interval:
-            self.move_cards_from_original_to_target_day(interval, invert, amount,
-                                                        original_day=interval, target_day=interval - 1)
-        else:
-            if amount >= 2:
-                absolute_half = int(amount / 2)
-                self.move_cards_from_original_to_target_day(interval, invert, amount=absolute_half,
-                                                            original_day=original_day, target_day=original_day - 1)
-                self.move_cards_from_original_to_target_day(interval, invert, amount=absolute_half,
-                                                            original_day=original_day, target_day=original_day + 1)
+            assert original_day >= 1
+            assert original_day <= interval
+            assert amount > 0
+
+            if amount == 1:
+                showInfo(f"Trying to move only 1 card : we shouldn't use the current method + {__name__}")
+                self.show_both_original_and_target_difference()
+                exit(1)
+
+            if original_day == 1:
+                self.move_cards_from_original_to_target_day(interval, amount,
+                                                            original_day=1, target_day=2)
+            elif original_day == interval:
+                self.move_cards_from_original_to_target_day(interval, amount,
+                                                            original_day=interval, target_day=interval - 1)
             else:
-                if is_move_right():
-                    if invert:
-                        original_day = get_due_day_for_first_positive_difference()
-                        invert = False
-                    self.move_cards_from_original_to_target_day(interval, invert, amount=1,
-                                                                original_day=original_day, target_day=original_day + 1)
+                absolute_half = int(amount / 2)
+                self.move_cards_from_original_to_target_day(interval, amount=absolute_half,
+                                                            original_day=original_day, target_day=original_day - 1)
+                self.move_cards_from_original_to_target_day(interval, amount=absolute_half,
+                                                            original_day=original_day, target_day=original_day + 1)
+
+        def show_error_message_of_main_algorithm_and_exits():
+            text = "Problem in main algorithm : limit of expected maximum iterations broken through"
+            for interval_2 in self.sequence_of_intervals:
+                text += f"\n Number of iterations for interval {interval_2} : "
+                text += f"{self.number_of_iterations_of_main_algorithm[interval_2]}"
+            showInfo(text)
+            self.show_both_original_and_target_difference()
+            exit(1)
+
+        # --- Actual Beginning of the Core Algorithm --- #
+
+        # TODO: find a formula for max number of iterations possible (use worst case scenario)
+        for interval in self.sequence_of_intervals:
+            self.number_of_iterations_of_main_algorithm[interval] = 0
+
+        for interval in self.sequence_of_intervals:
+            iteration = 1
+
+            max_iteration_for_current_range = MAX_ITERATION_IN_MAIN_ALGORITHM
+            # TODO: add comment about how the main algorithm works
+            while iteration < max_iteration_for_current_range:
+
+                if SHOW_EVERY_ITERATION:
+                    showInfo(self.print_difference_target())
+
+                (due_max_day, max_alg_difference) = find_highest_positive_absolute_difference()
+                (due_min_day, min_alg_difference) = find_highest_negative_absolute_difference()
+
+                # Determine if we need to stop the main algorithm (= rescheduling finished)
+                if max_alg_difference == 0 and min_alg_difference == 0:
+                    break
+
+                # Determine if we move only 1 card or more
+                if max_alg_difference == 1 or (max_alg_difference == 0 and min_alg_difference < 0):
+                    # If only one card needs to be moved, we need to move it towards the highest negative difference
+                    # First we need to find one of the highest negative difference (without rounding),
+                    # Then find the highest positive difference (without rounding) closest to it,
+                    # Then move the positive difference towards the negative one.
+                    due_min_day = find_highest_negative_algebraic_difference()
+                    due_max_day = find_highest_positive_algebraic_difference_closest_to_min_value(due_min_day)
+                    if is_move_right(due_max_day, due_min_day):
+                        self.move_cards_from_original_to_target_day(interval, amount=1, original_day=due_max_day,
+                                                                    target_day=due_max_day + 1)
+                    else:
+                        self.move_cards_from_original_to_target_day(interval, amount=1, original_day=due_max_day,
+                                                                    target_day=due_max_day - 1)
                 else:
-                    if invert:
-                        original_day = get_due_day_for_first_positive_difference()
-                        invert = False
-                    self.move_cards_from_original_to_target_day(interval, invert, amount=1,
-                                                                original_day=original_day, target_day=original_day - 1)
+                    move_cards_from_due_day(original_day=due_max_day, amount=max_alg_difference)
+
+                # After moving cards, we need to recalculate the new difference
+                self.calculate_difference_between_current_and_average_due_day()
+                iteration += 1
+
+            self.number_of_iterations_of_main_algorithm[interval] = iteration
+            if iteration == max_iteration_for_current_range:
+                show_error_message_of_main_algorithm_and_exits()
 
     # Algorithm to select and move cards from original to target day while minimizing the amount of rescheduling
-    def move_cards_from_original_to_target_day(self, interval: int, invert: bool, amount: int,
+    def move_cards_from_original_to_target_day(self, interval: int, amount: int,
                                                original_day: int, target_day: int):
 
-        # --- Internal Methods of the current method --- #
+        # --- Internal Methods of the Move Card Algorithm --- #
 
         # Find the cards which were originally the closest to first_original_due_day
         def get_cards_by_diff_between_target_and_first_original_due_day() -> Dict[int, List[Card]]:
             cards_by_diff_compute: Dict[int, List[Card]] = RescheduleDeck.init_dict_of_cards(range1(0, interval))
             for card in cards_for_original_day:
-                diff = abs(target_day - cards_with_their_due_date[card])
+                diff = abs(target_day - cards_with_their_due_day[card])
                 cards_by_diff_compute[diff].append(card)
             return cards_by_diff_compute
 
@@ -555,7 +547,7 @@ class RescheduleDeck:
             else:
                 return cards_to_move
 
-        # Move selected cards among given cards from original_day to target_day
+        # Select and move cards from original_day to target_day
         def move_cards_among_list(cards_to_move: List[Card], nb_of_cards_to_move: int):
             cards_to_move_selected: List[Card] = select_cards_to_move(cards_to_move, nb_of_cards_to_move)
             for card in cards_to_move_selected:
@@ -564,7 +556,7 @@ class RescheduleDeck:
 
         def show_error_message_of_move_algorithm_and_exits() -> None:
             text = "Error, too many iterations in move_cards : "
-            text += f"\n interval: {interval}, invert: {invert}, amount: {amount}"
+            text += f"\n interval: {interval}, amount: {amount}"
             text += f", original_day: {original_day}, target_day: {target_day}"
             showInfo(text)
             self.show_both_original_and_target_difference()
@@ -591,19 +583,12 @@ class RescheduleDeck:
             if iteration == interval:
                 show_error_message_of_move_algorithm_and_exits()
 
-        # --- End of methods in current method and Beginning of current method --- #
-
-        # According to the value of invert, we either move cards to or from original_day
-        # TODO: create own boolean type for cleaner code
-        if invert:
-            temp = original_day
-            original_day = target_day
-            target_day = temp
+        # --- Actual Beginning of the Move Card Algorithm --- #
 
         # Class attributes used in the method
-        cards_for_original_day: List[Card] = self.cards_by_interval_by_due_day_target[interval][original_day]
-        cards_for_target_day: List[Card] = self.cards_by_interval_by_due_day_target[interval][target_day]
-        cards_with_their_due_date: Dict[Card, int] = self.cards_with_first_original_due_day
+        cards_for_original_day: List[Card] = self.cards_target_by_interval_by_due_day[interval][original_day]
+        cards_for_target_day: List[Card] = self.cards_target_by_interval_by_due_day[interval][target_day]
+        cards_with_their_due_day: Dict[Card, int] = self.cards_with_first_original_due_day
 
         # Check potential restriction to the algorithm, and modifies the amount of cards to move if necessary
         if amount > len(cards_for_original_day):
@@ -624,12 +609,12 @@ class RescheduleDeck:
         # Determines the new due_day from the attribute "cards_by_interval_by_due_day" modified by the algorithm
         # Note: this method is inside another one because we want to avoid adding a new class attribute (arguable)
         def determine_new_due_day_for_all_cards() -> Dict[Card, int]:
-            new_due_date_by_card: Dict[Card, int] = dict()
+            new_due_day_by_card: Dict[Card, int] = dict()
             for interval in self.sequence_of_intervals:
                 for due_day in range1(1, interval):
-                    for card_2 in self.cards_by_interval_by_due_day_target[interval][due_day]:
-                        new_due_date_by_card[card_2] = due_day
-            return new_due_date_by_card
+                    for card_2 in self.cards_target_by_interval_by_due_day[interval][due_day]:
+                        new_due_day_by_card[card_2] = due_day
+            return new_due_day_by_card
 
         cards_with_new_due_day: Dict[Card, int] = determine_new_due_day_for_all_cards()
         cards_with_only_different_new_due_day: Dict[Card, int] = dict()
@@ -652,80 +637,81 @@ class RescheduleDeck:
             text += f"{str(len(self.cards_by_interval[interval]))}"
         return text
 
-    def print_cards_by_interval_by_due_date_original(self) -> str:
-        return self.print_cards_by_interval_by_due_date(self.cards_by_interval_by_due_day_original)
+    def print_cards_by_interval_by_due_day_original(self) -> str:
+        return self.print_cards_by_interval_by_due_day(self.cards_original_by_interval_by_due_day)
 
-    def print_cards_by_interval_by_due_date_target(self) -> str:
-        return self.print_cards_by_interval_by_due_date(self.cards_by_interval_by_due_day_original)
+    def print_cards_by_interval_by_due_day_target(self) -> str:
+        return self.print_cards_by_interval_by_due_day(self.cards_original_by_interval_by_due_day)
 
-    def print_cards_by_interval_by_due_date(self, cards: Dict[int, Dict[int, List]]) -> str:
-        text = "Nb of Cards for each interval and each due date"
+    def print_cards_by_interval_by_due_day(self, cards: Dict[int, Dict[int, List]]) -> str:
+        text = "Nb of Cards for each interval and each due day"
         for interval in self.sequence_of_intervals:
-            text += f"\n\n Nb of Cards for each due date in interval = {interval} "
+            text += f"\n\n Nb of Cards for each due day in interval = {interval} "
             text += f", (average = {self.average_number_of_cards_by_interval[interval]}) :"
             for due_day in range1(1, interval):
-                text += f"\n Nb of Cards for interval = {interval} and due date = {due_day} : "
+                text += f"\n Nb of Cards for interval = {interval} and due day = {due_day} : "
                 text += f"{str(len(cards[interval][due_day]))}"
         return text
 
     def print_difference_original(self) -> str:
-        return self.print_difference(self.cards_by_interval_by_due_day_original, self.difference_of_cards_by_interval_by_due_date_original)
+        return self.print_difference(self.cards_original_by_interval_by_due_day,
+                                     self.difference_original_of_cards_by_interval_by_due_day)
 
     def print_difference_target(self) -> str:
-        return self.print_difference(self.cards_by_interval_by_due_day_target, self.difference_of_cards_by_interval_by_due_date_target)
+        return self.print_difference(self.cards_target_by_interval_by_due_day,
+                                     self.difference_target_of_cards_by_interval_by_due_day)
 
     def print_difference(self, cards: Dict[int, Dict[int, List]], differences: Dict[int, Dict[int, int]]) -> str:
-        text = "Computed difference of cards between current and average by interval and due_date"
+        text = "Computed difference of cards between current and average by interval and due_day"
         for interval in self.sequence_of_intervals:
             text += f"\n\n For interval = {interval}"
             text += f", total_number = {len(self.cards_by_interval[interval])}"
             text += f", average cards by day = {self.average_number_of_cards_by_interval[interval]} :"
             # TODO: add average difference by day
             for due_day in range1(1, interval):
-                text += f"\n For interval '{interval}' and due_date '{due_day}'"
+                text += f"\n For interval '{interval}' and due_day '{due_day}'"
                 text += f", nb_of_cards = {len(cards[interval][due_day])}"
                 text += f", difference = {differences[interval][due_day]}"
         return text
 
-    # TODO: improve comment
     # TODO: REFACTOR
     # TODO: DIFFERENTIATE TEXT IF RESCHEDULING PAST OVERDUE CARDS OR NOT
-    # Access to self.cards_with_only_different_new_due_date, self.cards_with_first_original_due_day, self.max_interval,
+    # Access to self.cards_with_only_different_new_due_day, self.cards_with_first_original_due_day, self.max_interval,
     # self.day_of_today, self.cards
     def print_distribution_of_cards_rescheduled(self) -> str:
 
-        if len(self.cards_with_only_different_new_due_date) == 0:
+        if len(self.cards_with_only_different_new_due_day) == 0:
             return "Your deck doesn't need to be rescheduled ! \\o"
 
         range_for_absolute_difference = range1(0, self.max_interval)
         range_for_algebraic_difference = range1(-self.max_interval, self.max_interval)
 
-        cards_to_reschedule_by_absolute_diff_in_due_date: Dict[int, List[Card]] = RescheduleDeck. \
+        cards_to_reschedule_by_absolute_diff_in_due_day: Dict[int, List[Card]] = RescheduleDeck. \
             init_dict_of_cards(range_for_absolute_difference)
 
-        cards_to_reschedule_by_algebraic_diff_in_due_date: Dict[int, List[Card]] = RescheduleDeck. \
+        cards_to_reschedule_by_algebraic_diff_in_due_day: Dict[int, List[Card]] = RescheduleDeck. \
             init_dict_of_cards(range_for_algebraic_difference)
-        for card in self.cards_with_only_different_new_due_date:
-            original_due_date = self.cards_with_first_original_due_day[card]
-            new_due_date = self.cards_with_only_different_new_due_date[card] - self.day_of_today
-            absolute_difference = abs(new_due_date - original_due_date)
-            algebraic_difference = (new_due_date - original_due_date)
+        for card in self.cards_with_only_different_new_due_day:
+            original_due_day = self.cards_with_first_original_due_day[card]
+            new_due_day = self.cards_with_only_different_new_due_day[card] - self.day_of_today
+            absolute_difference = abs(new_due_day - original_due_day)
+            algebraic_difference = (new_due_day - original_due_day)
             assert absolute_difference > 0
-            cards_to_reschedule_by_absolute_diff_in_due_date[absolute_difference].append(card)
-            cards_to_reschedule_by_algebraic_diff_in_due_date[algebraic_difference].append(card)
+            cards_to_reschedule_by_absolute_diff_in_due_day[absolute_difference].append(card)
+            cards_to_reschedule_by_algebraic_diff_in_due_day[algebraic_difference].append(card)
 
         total_amount_of_rescheduling = 0
         for interval in range_for_absolute_difference:
-            total_amount_of_rescheduling += interval * len(cards_to_reschedule_by_absolute_diff_in_due_date[interval])
-        average_amount_of_rescheduling = total_amount_of_rescheduling / len(self.cards_with_only_different_new_due_date)
+            total_amount_of_rescheduling += interval * len(cards_to_reschedule_by_absolute_diff_in_due_day[interval])
+        average_amount_of_rescheduling = total_amount_of_rescheduling / len(self.cards_with_only_different_new_due_day)
         average_amount_of_rescheduling = round(average_amount_of_rescheduling * 100) / 100
         percentage_of_card_rescheduled = round(
-            len(self.cards_with_only_different_new_due_date) / len(self.cards) * 100 * 100) / 100
+            len(self.cards_with_only_different_new_due_day) / len(self.cards) * 100 * 100) / 100
 
         total_amount_of_push_forward = 0
         for interval in range_for_algebraic_difference:
-            total_amount_of_push_forward += interval * len(cards_to_reschedule_by_algebraic_diff_in_due_date[interval])
-        average_amount_of_push_forward = total_amount_of_push_forward / len(self.cards_with_only_different_new_due_date)
+            total_amount_of_push_forward += interval * len(cards_to_reschedule_by_algebraic_diff_in_due_day[interval])
+        average_amount_of_push_forward = total_amount_of_push_forward / len(self.cards_with_only_different_new_due_day)
         average_amount_of_push_forward = round(average_amount_of_push_forward * 100) / 100
         average_amount_of_all_push_forward = total_amount_of_push_forward / len(self.cards)
         average_amount_of_all_push_forward = round(average_amount_of_all_push_forward * 100) / 100
@@ -738,30 +724,39 @@ class RescheduleDeck:
 
         text = "Distribution of cards to reschedule : "
         text += f"\n Today's date for current deck = {self.retrieve_date_of_today(self.deck)}"
-        text += f"\n Amount of cards overdue (in review status <=> queue = 0) = {self.number_of_cards_overdue_only_for_reviews_queue_2}"
-        text += f"\n Amount of cards overdue (in learning status with original_due < 1 day <=> queue = 1) = {self.number_of_cards_overdue_only_for_learning_queue_1}"
-        text += f"\n Amount of cards overdue (in learning status with original_due > 1 day <=> queue = 3) = {self.number_of_cards_overdue_only_for_learning_queue_3}"
-        text += f"\n Amount of cards over-scheduled (in review status with due > interval) = {self.number_of_cards_over_scheduled}"
-        text += f"\n Amount of cards in deck not new, not suspended, in required interval range and overdue range= {len(self.cards)}"
-        text += f"\n Amount of cards to reschedule = {len(self.cards_with_only_different_new_due_date)}"
-        text += f"\n Percentage of cards to reschedule = {percentage_of_card_rescheduled}%"
-        text += f"\n Average amount by which cards are rescheduled (absolute diff among rescheduled cards)"
+        text += f"\n    Nb of cards overdue (in review status / queue = 0) = {self.number_of_cards_overdue_only_for_reviews_queue_2}"
+        text += f"\n    Nb of cards overdue (in learning status with original_due < 1 day / queue = 1) = {self.number_of_cards_overdue_only_for_learning_queue_1}"
+        text += f"\n    Nb of cards overdue (in learning status with original_due > 1 day / queue = 3) = {self.number_of_cards_overdue_only_for_learning_queue_3}"
+        text += f"\n    Nb of cards overdue (in buried status / queue = - 3) = {self.number_of_cards_overdue_only_for_buried_queue_minus_3}"
+        text += f"\n    Nb of cards over-scheduled (in review status with due > interval) = {self.number_of_cards_over_scheduled}"
+        text += f"\n Nb of cards in deck not new, not suspended, in required interval range and overdue range= {len(self.cards)}"
+        text += f"\n Nb of cards to reschedule = {len(self.cards_with_only_different_new_due_day)}"
+        text += f"\n    Percentage of cards to reschedule = {percentage_of_card_rescheduled}%"
+        text += f"\n    Average amount by which cards are rescheduled (absolute diff among rescheduled cards)"
         text += f" = {average_amount_of_rescheduling} days"
-        text += f"\n Average amount by which cards are pushed forward (algebraic diff among rescheduled cards)"
+        text += f"\n    Average amount by which cards are pushed forward (algebraic diff among rescheduled cards)"
         text += f" = {average_amount_of_push_forward} days"
-        text += f"\n Average amount by which all cards are pushed forward (algebraic diff among all cards)"
+        text += f"\n    Average amount by which all cards are pushed forward (algebraic diff among all cards)"
         text += f" = {average_amount_of_all_push_forward} days"
         for interval in range_for_absolute_difference:
-            if len(cards_to_reschedule_by_absolute_diff_in_due_date[interval]) > 0:
-                text += f"\n  Amount of cards to reschedule by +- {interval} days : "
-                text += f"{len(cards_to_reschedule_by_absolute_diff_in_due_date[interval])}"
+            if len(cards_to_reschedule_by_absolute_diff_in_due_day[interval]) > 0:
+                text += f"\n       Amount of cards to reschedule by +- {interval} days : "
+                text += f"{len(cards_to_reschedule_by_absolute_diff_in_due_day[interval])}"
+        text += f"\n\n Iterations of main algorithm : "
+        total_iterations = 0
+        for interval in self.sequence_of_intervals:
+            if self.number_of_iterations_of_main_algorithm[interval] > 0:
+                total_iterations += self.number_of_iterations_of_main_algorithm[interval]
+                text += f"\n    For interval = {interval}, nb of iterations = "
+                text += f"{self.number_of_iterations_of_main_algorithm[interval]}"
+        text += f"\n Total number of iterations of main algorithm : {total_iterations}"
 
         text += f"\n"
         return text
 
     def show_both_original_and_target_cards_by_interval_by_due_day(self):
-        showInfo(self.print_cards_by_interval_by_due_date_original())
-        showInfo(self.print_cards_by_interval_by_due_date_target())
+        showInfo(self.print_cards_by_interval_by_due_day_original())
+        showInfo(self.print_cards_by_interval_by_due_day_target())
 
     def show_both_original_and_target_difference(self):
         showInfo(self.print_difference_original())
@@ -794,7 +789,7 @@ class QHSeparationLine(QFrame):
 # --- BEGINNING of DialogRescheduleDeck Class --- #
 
 
-# TODO: improve comment
+# TODO: ADD comment
 class DialogRescheduleDeck(QDialog):
     deck_name: str
     min_interval: int
@@ -842,7 +837,7 @@ class DialogRescheduleDeck(QDialog):
                            ", this will only display a preview of the schedule performed. Disable dry-run to actually reschedule cards.</font>"
         self._label_warning_dry_run = QLabel(text_for_dry_run)
         self._label_warning_dry_run.setWordWrap(True)
-        text_for_actual_run = "\n<font color=red>DRY-RUN DIS-ACTIVATED : THE DECK WILL BE RESCHEDULED - THIS ACTION CANNOT BE UNDONE.</font>"
+        text_for_actual_run = "\n<font color=red>dry-run disactivated : the deck will be rescheduled - THIS ACTION CANNOT BE UNDONE.</font>"
         self._label_warning_actual_run = QLabel(text_for_actual_run)
         self._label_warning_actual_run.setWordWrap(True)
 
@@ -923,7 +918,7 @@ class DialogRescheduleDeck(QDialog):
         self._label_rescheduling_information.setText(reorder_deck.print_distribution_of_cards_rescheduled())
         if not self.is_dry_run:
             # TODO: Add a confirmation pop-up
-            reschedule_cards_in_database(reorder_deck.cards_with_only_different_new_due_date)
+            reschedule_cards_in_database(reorder_deck.cards_with_only_different_new_due_day)
             # TODO: Add a success window (with some kind of internal check to ensure the rescheduling went okay!!!)
 
 
@@ -947,9 +942,9 @@ def get_deck(deckname: str) -> DeckDict:
     return mw.col.decks.by_name(deckname)
 
 
-def reschedule_cards_in_database(cards_with_new_due_date: Dict[Card, int]) -> None:
-    for card in cards_with_new_due_date:
-        card.due = cards_with_new_due_date[card]
+def reschedule_cards_in_database(cards_with_new_due_day: Dict[Card, int]) -> None:
+    for card in cards_with_new_due_day:
+        card.due = cards_with_new_due_day[card]
         card.flush()
     pass
 
